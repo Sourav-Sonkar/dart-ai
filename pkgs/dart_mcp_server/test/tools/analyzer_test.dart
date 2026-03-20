@@ -255,7 +255,8 @@ void main() {
       await example.create();
       final exampleRoot = testHarness.rootForPath(example.io.path);
       testHarness.mcpClient.addRoot(exampleRoot);
-      await pumpEventQueue();
+      // PumpEventQueue isn't sufficient for this test for some reason.
+      await Future<void>.delayed(const Duration(milliseconds: 100));
 
       final request = CallToolRequest(
         name: analyzeTool.name,
@@ -271,8 +272,9 @@ void main() {
         isA<TextContent>().having(
           (t) => t.text,
           'text',
-          'No roots set. At least one root must be set in order to use this '
-              'tool.',
+          'A list of roots was provided, but it was empty. Either omit the '
+              '`roots` parameter to use the default roots, or provide a '
+              'non-empty list of roots.',
         ),
       );
     });
