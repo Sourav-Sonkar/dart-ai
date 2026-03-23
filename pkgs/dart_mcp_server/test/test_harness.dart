@@ -29,11 +29,16 @@ import 'package:unified_analytics/unified_analytics.dart';
 Future<T> callWithRetry<T>(
   FutureOr<T> Function() fn, {
   int maxTries = 5,
+  bool Function(T)? retryUntil,
 }) async {
   var tryCount = 0;
   while (true) {
     try {
-      return await fn();
+      final result = await fn();
+      if (retryUntil?.call(result) == false) {
+        throw StateError('Retry condition not met');
+      }
+      return result;
     } catch (_) {
       if (tryCount++ >= maxTries) rethrow;
     }
@@ -230,9 +235,11 @@ class TestHarness {
     CallToolRequest request, {
     int maxTries = 5,
     bool expectError = false,
+    bool Function(CallToolResult)? retryUntil,
   }) => callWithRetry(
     () => callTool(request, expectError: expectError),
     maxTries: maxTries,
+    retryUntil: retryUntil,
   );
 
   /// Calls [getPrompt] on the [mcpServerConnection].
@@ -319,8 +326,8 @@ final class AppDebugSession {
       process.stdin.writeln('q');
       await process.shouldExit(0);
     } else {
-      unawaited(process.kill());
-      await process.shouldExit(anyOf(0, Platform.isWindows ? -1 : -9));
+      await process.kill();
+      await process.shouldExit();
     }
   }
 }
@@ -443,6 +450,7 @@ class FakeEditorExtension {
   Future<void> shutdown() async {
     await _debugSessions.toList().map(removeDebugSession).wait;
     await dtdProcess.kill();
+    await dtdProcess.shouldExit();
     await dtd.close();
   }
 }
@@ -545,11 +553,19 @@ Future<ServerConnectionPair> _initializeMCPServer(
       for (var enabled in featuresConfig.enabledNames) '--enable=$enabled',
       for (var disabled in featuresConfig.disabledNames) '--disable=$disabled',
     ]);
-    addTearDown(process.kill);
+    addTearDown(() async {
+      process.kill();
+      await process.exitCode;
+    });
     connection = client.connectServer(
       stdioChannel(input: process.stdout, output: process.stdin),
     );
-    unawaited(connection.done.then((_) => process.kill()));
+    unawaited(
+      connection.done.then((_) async {
+        process.kill();
+        await process.exitCode;
+      }),
+    );
   }
 
   final initializeResult = await connection.initialize(
