@@ -470,7 +470,16 @@ void main() {
           final stdin = debugSession.appProcess.stdin;
           await stdout.skip(1); // VM service line
           stdin.writeln('');
-          expect(await stdout.next, 'hello');
+
+          Future<void> expectNext(String expected) async {
+            var nextLine = await stdout.next;
+            while (nextLine.contains('DevTools debugger')) {
+              nextLine = await stdout.next;
+            }
+            expect(nextLine, expected);
+          }
+
+          await expectNext('hello');
           await Future<void>.delayed(const Duration(seconds: 1));
 
           final originalContents = await mainFile.readAsString();
@@ -494,7 +503,7 @@ void main() {
           );
 
           stdin.writeln('');
-          expect(await stdout.next, 'world');
+          await expectNext('world');
 
           stdin.writeln('q');
           await testHarness.stopDebugSession(debugSession);
