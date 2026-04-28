@@ -28,7 +28,7 @@ import 'package:unified_analytics/unified_analytics.dart';
 
 Future<T> callWithRetry<T>(
   FutureOr<T> Function() fn, {
-  int maxTries = 10,
+  int maxTries = 5,
   bool Function(T)? retryUntil,
 }) async {
   var tryCount = 0;
@@ -231,7 +231,7 @@ class TestHarness {
   /// Some methods will fail if the DTD connection is not yet ready.
   Future<CallToolResult> callToolWithRetry(
     CallToolRequest request, {
-    int maxTries = 10,
+    int maxTries = 5,
     bool expectError = false,
     bool Function(CallToolResult)? retryUntil,
   }) => callWithRetry(
@@ -275,9 +275,9 @@ final class AppDebugSession {
     final process = await TestProcess.start(
       isFlutter ? sdk.flutterExecutablePath : sdk.dartExecutablePath,
       [
-        if (isFlutter) 'run',
-        if (isFlutter) '--no-devtools',
-        if (!isFlutter) '--enable-vm-service=0',
+        'run',
+        '--no${isFlutter ? '' : '-serve'}-devtools',
+        '--enable-vm-service=0',
         if (isFlutter) ...['-d', 'flutter-tester'],
         appPath,
         ...args,
@@ -336,12 +336,9 @@ final class AppDebugSession {
       }
       try {
         await process.shouldExit(0).timeout(const Duration(seconds: 10));
-      } catch (_) {
+      } on TimeoutException catch (_) {
         await process.kill();
-        // Ignore exit code since we had to forcefully kill
-        try {
-          await process.shouldExit().timeout(const Duration(seconds: 5));
-        } catch (_) {}
+        await process.shouldExit();
       }
     } else {
       // Send q which triggers graceful shutdown in our test scripts
@@ -355,11 +352,9 @@ final class AppDebugSession {
       }
       try {
         await process.shouldExit().timeout(const Duration(seconds: 10));
-      } catch (_) {
+      } on TimeoutException catch (_) {
         await process.kill();
-        try {
-          await process.shouldExit().timeout(const Duration(seconds: 5));
-        } catch (_) {}
+        await process.shouldExit();
       }
     }
   }
@@ -485,12 +480,14 @@ class FakeEditorExtension {
     await dtd.close();
     try {
       await dtdProcess.stdin.close();
-      await dtdProcess.shouldExit().timeout(const Duration(seconds: 5));
     } catch (_) {
+      // stdin already closed
+    }
+    try {
+      await dtdProcess.shouldExit().timeout(const Duration(seconds: 5));
+    } on TimeoutException catch (_) {
       await dtdProcess.kill();
-      try {
-        await dtdProcess.shouldExit().timeout(const Duration(seconds: 5));
-      } catch (_) {}
+      await dtdProcess.shouldExit();
     }
   }
 }
@@ -579,6 +576,8 @@ Future<ServerConnectionPair> _initializeMCPServer(
     connection = client.connectServer(clientChannel);
   } else {
     final process = await Process.start(sdk.dartExecutablePath, [
+      'pub', // Using `pub` gives us incremental compilation
+      'run',
       'bin/main.dart',
       ...cliArgs,
       for (var enabled in featuresConfig.enabledNames) '--enable=$enabled',
@@ -587,18 +586,14 @@ Future<ServerConnectionPair> _initializeMCPServer(
     addTearDown(() async {
       try {
         await process.stdin.close();
-        await process.exitCode.timeout(const Duration(seconds: 5));
       } catch (_) {
+        // stdin already closed
+      }
+      try {
+        await process.exitCode.timeout(const Duration(seconds: 5));
+      } on TimeoutException catch (_) {
         process.kill();
-        try {
-          await process.exitCode.timeout(
-            const Duration(seconds: 5),
-            onTimeout: () {
-              process.kill(ProcessSignal.sigkill);
-              return process.exitCode;
-            },
-          );
-        } catch (_) {}
+        await process.exitCode;
       }
     });
     connection = client.connectServer(
