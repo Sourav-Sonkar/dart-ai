@@ -319,13 +319,43 @@ final class AppDebugSession {
     );
   }
 
+  /// Gracefully shuts down the [process].
+  ///
+  /// Note: this method may be called more than once for the same process
+  /// because [_start] registers its own [addTearDown] and some tests also
+  /// call [TestHarness.stopDebugSession] in their tearDown. The try/catch
+  /// around stdin operations handles the case where stdin is already closed
+  /// from a prior call.
   static Future<void> kill(TestProcess process, bool isFlutter) async {
     if (isFlutter) {
-      process.stdin.writeln('q');
-      await process.shouldExit(0);
+      try {
+        process.stdin.writeln('q');
+        // ignore: avoid_catching_errors
+      } on StateError catch (_) {
+        // stdin already closed from a prior kill() call.
+      }
+      try {
+        await process.shouldExit(0).timeout(const Duration(seconds: 10));
+      } on TimeoutException catch (_) {
+        await process.kill();
+        await process.shouldExit();
+      }
     } else {
-      await process.kill();
-      await process.shouldExit();
+      // Send q which triggers graceful shutdown in our test scripts
+      try {
+        process.stdin.writeln('q');
+        // Also close stdin for scripts listening to onDone
+        await process.stdin.close();
+        // ignore: avoid_catching_errors
+      } on StateError catch (_) {
+        // stdin already closed from a prior kill() call.
+      }
+      try {
+        await process.shouldExit().timeout(const Duration(seconds: 10));
+      } on TimeoutException catch (_) {
+        await process.kill();
+        await process.shouldExit();
+      }
     }
   }
 }
@@ -447,9 +477,18 @@ class FakeEditorExtension {
 
   Future<void> shutdown() async {
     await _debugSessions.toList().map(removeDebugSession).wait;
-    await dtdProcess.kill();
-    await dtdProcess.shouldExit();
     await dtd.close();
+    try {
+      await dtdProcess.stdin.close();
+    } catch (_) {
+      // stdin already closed
+    }
+    try {
+      await dtdProcess.shouldExit().timeout(const Duration(seconds: 5));
+    } on TimeoutException catch (_) {
+      await dtdProcess.kill();
+      await dtdProcess.shouldExit();
+    }
   }
 }
 
@@ -545,8 +584,17 @@ Future<ServerConnectionPair> _initializeMCPServer(
       for (var disabled in featuresConfig.disabledNames) '--disable=$disabled',
     ]);
     addTearDown(() async {
-      process.kill();
-      await process.exitCode;
+      try {
+        await process.stdin.close();
+      } catch (_) {
+        // stdin already closed
+      }
+      try {
+        await process.exitCode.timeout(const Duration(seconds: 5));
+      } on TimeoutException catch (_) {
+        process.kill();
+        await process.exitCode;
+      }
     });
     connection = client.connectServer(
       stdioChannel(input: process.stdout, output: process.stdin),
