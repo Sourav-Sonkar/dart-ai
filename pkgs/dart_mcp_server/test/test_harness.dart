@@ -277,7 +277,7 @@ final class AppDebugSession {
       [
         'run',
         '--no${isFlutter ? '' : '-serve'}-devtools',
-        '--enable-vm-service=0',
+        if (!isFlutter) '--enable-vm-service=0',
         if (isFlutter) ...['-d', 'flutter-tester'],
         appPath,
         ...args,
